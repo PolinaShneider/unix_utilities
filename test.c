@@ -41,26 +41,26 @@ int main() {
     perror("Fork error");
   }
   else if (n==0) {
-    int i=7;
-    while(i--) {
-      printf(".");
-      fflush(stdout);
-      sleep(1);
-    }
-    // execlp("./dot.out", "./dot.out", (char *) NULL);
-    // validate_stdin();
+    int i=4;
+    validate_stdin();
     // to_background();
     // validate_stdin();
-    // to_foreground();
+    to_foreground();
     // validate_stdin();
+    // while(i--) {
+    //   printf(".");
+    //   fflush(stdout);
+    //   sleep(1);
+    // }
+    execlp("./dot.out", "./dot.out", (char *) NULL);
   }
   else {
-    int *stat = NULL;
+    int stat = 0;
     int pid;
     // do {
     //   pid = waitpid(-1,stat, WEXITED|WSTOPPED|WUNTRACED);
-      pid = wait(&stat);
-      printf("%d\n", pid);
+      pid = waitpid(-1, &stat, WUNTRACED);
+      printf("%d %d %d\n", pid, stat, WIFEXITED(stat));
     // }
     // while (pid != -1 && stat == NULL && !(WIFEXITED(*stat) || (WIFSTOPPED(*stat) && WSTOPSIG(*stat) == SIGTSTP)));
     printf("Back to parent\n");
