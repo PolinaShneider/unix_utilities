@@ -4,11 +4,13 @@
 #include <string.h>
 #include <signal.h>
 
-char **read_command() {
+#define DEBUG 1
+
+char **read_command(int *is_background) {
 
   char *x = NULL;
   char *t;
-
+  *is_background = 0;
   // puts("Please enter a line of text");
   size_t bufsize=0;
   int size = 0;
@@ -41,6 +43,15 @@ char **read_command() {
     t = strtok (NULL, " \t");
     if (t==NULL)
       break;
+    else if (!strcmp(t, "&")) {
+      *is_background = 1;
+      break;
+    }
+    else if (t[strlen(t)-1] == '&') {
+      *is_background = 1;
+      t[strlen(t)-1] = '\0';
+    }
+
     c[++i] = (char *)malloc((strlen(t))*sizeof(char));
     strcpy(c[i],t);
   }
@@ -50,21 +61,63 @@ char **read_command() {
   return c;
 }
 
+void x() {
+  printf("Signal  %d!!!\n", getpid());
+}
+
 int main() {
   
-  signal(SIGINT, SIG_IGN);
-  signal(SIGTSTP, SIG_IGN);
-  signal(SIGQUIT, SIG_IGN);
+  // signal(SIGINT, SIG_IGN); // ctrl+c
+  signal(SIGTSTP, x); //ctrl+z
+  signal(SIGQUIT, SIG_IGN); // ctrl+\
 
-  char **c = read_command();
+  int bckgrnd;
+  char **c = read_command(&bckgrnd);
+  x();
+  if (DEBUG) {
+    if (bckgrnd)
+      printf("Background\n");
+    else
+      printf("Foreground\n");
+  }
 
   if (c[0]!= NULL) {
-    if (fork() == 0) {
+    int child_pid;
+    if ((child_pid=fork()) == 0) {
+
+      signal(SIGTTOU, SIG_IGN);
+
+      if (DEBUG) 
+        printf("fg group is %d\n", tcgetpgrp(0)); 
+
+      //create a new proces sgroup.
+      setpgid(getpid(),getpid());
+      //set it as fg group in the terminal
+      tcsetpgrp(0,getpgid(getpid()));
+
+      if (DEBUG) {
+        int qw = 0;
+        scanf("%d", &qw);
+        printf("fg group is %d  %d\n", tcgetpgrp(0), qw); 
+        fflush(stdout);
+      }
+
+      x();
+      // signal(SIGTSTP, SIG_DFL);
       if (execvp(c[0], c)<0)
         perror("Exec Error");
     }
     else {
-      wait();
+      int *stat;
+      do {
+        printf("%d", waitpid(-1,stat, WEXITED|WSTOPPED|WUNTRACED));
+        // wait(&stat);
+        // printf("S\n");
+      }
+      while (WIFEXITED(stat) || (WIFSTOPPED(stat) && WSTOPSIG(stat) == SIGTSTP));
+      if (DEBUG)
+        printf("Back to parent\n");
+      // exit(0);
     }
   }
 }
