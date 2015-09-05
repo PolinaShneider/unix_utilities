@@ -12,6 +12,7 @@ void to_foreground() {
 }
 
 void to_background() {
+//to be called only if to_foreground hasn't been
   signal(SIGTTOU, SIG_IGN);
   //create a new proces sgroup.
   setpgid(getpid(),getpid());

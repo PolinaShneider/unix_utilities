@@ -65,6 +65,21 @@ void x() {
   printf("Signal  %d!!!\n", getpid());
 }
 
+void to_foreground() {
+  signal(SIGTTOU, SIG_IGN);
+  //create a new proces sgroup.
+  setpgid(getpid(),getpid());
+  //set it as fg group in the terminal
+  tcsetpgrp(0,getpgid(getpid()));
+}
+
+void to_background() {
+//to be called only if to_foreground hasn't been
+  signal(SIGTTOU, SIG_IGN);
+  //create a new proces sgroup.
+  setpgid(getpid(),getpid());
+}
+
 int main() {
   
   // signal(SIGINT, SIG_IGN); // ctrl+c
@@ -82,32 +97,41 @@ int main() {
   }
 
   if (c[0]!= NULL) {
-    int child_pid;
-    if ((child_pid=fork()) == 0) {
+    pid_t child_pid;
+    if ((child_pid=fork()) < 0) {
+      perror("Fork error");
+    }
+    else if (child_pid == 0) {
+      // signal(SIGTTOU, SIG_IGN);
 
-      signal(SIGTTOU, SIG_IGN);
+      // if (DEBUG) 
+      //   printf("fg group is %d\n", tcgetpgrp(0)); 
 
-      if (DEBUG) 
-        printf("fg group is %d\n", tcgetpgrp(0)); 
+      // //create a new proces sgroup.
+      // setpgid(getpid(),getpid());
+      // //set it as fg group in the terminal
+      // tcsetpgrp(0,getpgid(getpid()));
 
-      //create a new proces sgroup.
-      setpgid(getpid(),getpid());
-      //set it as fg group in the terminal
-      tcsetpgrp(0,getpgid(getpid()));
+      // if (DEBUG) {
+      //   int qw = 0;
+      //   scanf("%d", &qw);
+      //   printf("fg group is %d  %d\n", tcgetpgrp(0), qw); 
+      //   fflush(stdout);
+      // }
 
-      if (DEBUG) {
-        int qw = 0;
-        scanf("%d", &qw);
-        printf("fg group is %d  %d\n", tcgetpgrp(0), qw); 
-        fflush(stdout);
-      }
+      // if (!bckgrnd)
+        to_foreground();
+      // else
+      //   to_background();
 
-      x();
+      if (DEBUG)
+        x();
       // signal(SIGTSTP, SIG_DFL);
       if (execvp(c[0], c)<0)
         perror("Exec Error");
     }
     else {
+      /*
       int *stat;
       do {
         printf("%d", waitpid(-1,stat, WEXITED|WSTOPPED|WUNTRACED));
@@ -115,6 +139,13 @@ int main() {
         // printf("S\n");
       }
       while (WIFEXITED(stat) || (WIFSTOPPED(stat) && WSTOPSIG(stat) == SIGTSTP));
+      */
+
+      int stat = 0;
+      int pid;
+      pid = waitpid(-1, &stat, WUNTRACED);
+      printf("%d %d %d\n", pid, stat, WIFEXITED(stat));
+
       if (DEBUG)
         printf("Back to parent\n");
       // exit(0);
