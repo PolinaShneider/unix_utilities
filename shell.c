@@ -4,12 +4,7 @@
 #include <string.h>
 #include <signal.h>
 
-int main() {
-//  while(1);
-  
-  signal(SIGINT, SIG_IGN);
-  signal(SIGTSTP, SIG_IGN);
-  signal(SIGQUIT, SIG_IGN);
+char **read_command() {
 
   char *x = NULL;
   char *t;
@@ -35,8 +30,12 @@ int main() {
 
   i=0;
   t = strtok (x," \t");
-  c[i] = (char *)malloc((strlen(t))*sizeof(char));
-  strcpy(c[i],t);
+  if (t == NULL)
+    i--;
+  else {
+    c[i] = (char *)malloc((strlen(t))*sizeof(char));
+    strcpy(c[i],t);
+  }
   while (1)
   {
     t = strtok (NULL, " \t");
@@ -48,13 +47,26 @@ int main() {
   c[++i] = (char *) NULL;
 
   free(x);
+  return c;
+}
 
+int main() {
+  
+  signal(SIGINT, SIG_IGN);
+  signal(SIGTSTP, SIG_IGN);
+  signal(SIGQUIT, SIG_IGN);
 
-  // char *c[4] = {"ls","-a","-l", (char *) NULL};//, "-a", "-l"};
-  // char *c[2] = {"./inf.out", (char *) NULL};
+  char **c = read_command();
 
-  if (execvp(c[0], c)<0)
-    perror("Exec Error");
+  if (c[0]!= NULL) {
+    if (fork() == 0) {
+      if (execvp(c[0], c)<0)
+        perror("Exec Error");
+    }
+    else {
+      wait();
+    }
+  }
 }
 
 
