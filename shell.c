@@ -3,11 +3,15 @@
 #include <unistd.h>
 #include <string.h>
 #include <signal.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
-#define DEBUG 1
-#define DEBUG2 1
 
-char **read_command(int *is_background) {
+#define DEBUG 0
+#define DEBUG2 0
+#define TEST_SLEEP 0
+
+char **read_command(int *is_background, int *command_size) {
 
   char *x = NULL;
   char *t;
@@ -69,7 +73,7 @@ char **read_command(int *is_background) {
   }
 
   c[++i] = (char *) NULL;
-
+  *command_size = i;
   free(x);
   return c;
 }
@@ -79,7 +83,7 @@ void x() {
 }
 
 void y() {
-  printf("Stopped child");
+  printf("Stopped child---------------------------");
 }
 
 void to_foreground() {
@@ -99,7 +103,7 @@ void to_background() {
 
 int main() {
   
-  signal(SIGINT, SIG_IGN); // ctrl+c
+  // signal(SIGINT, SIG_IGN); // ctrl+c
   signal(SIGTSTP, x); //ctrl+z
   signal(SIGQUIT, SIG_IGN); // ctrl+\
   signal(SIGCHLD, y); // ctrl+\
@@ -109,8 +113,8 @@ int main() {
       printf("Entering\n");
       fflush(stdout);
     }
-    int bckgrnd;
-    char **c = read_command(&bckgrnd);
+    int bckgrnd, cmd_size;
+    char **c = read_command(&bckgrnd, &cmd_size);
     x();
     if (DEBUG) {
       if (bckgrnd)
@@ -119,7 +123,24 @@ int main() {
         printf("Foreground\n");
     }
 
-    if (c[0]!= NULL) {
+    if (c[0]!= NULL && strcmp(c[0],"start")==0 && cmd_size==2) {
+      int cpid = atoi(c[1]);
+      if (cpid <= 0) {
+        perror("Invalid pid");
+      }
+      kill(cpid, SIGCONT);
+    }
+    else if (c[0]!= NULL && strcmp(c[0],"stop")==0 && cmd_size==2) {
+      int cpid = atoi(c[1]);
+      if (cpid <= 0) {
+        perror("Invalid pid");
+      }
+      kill(cpid, SIGTSTP);
+    }
+    else if (c[0]!= NULL && strcmp(c[0],"stop")==0 && cmd_size==2) {
+
+    }
+    else if (c[0]!= NULL) {
       pid_t child_pid;
       if ((child_pid=fork()) < 0) {
         perror("Fork error");
@@ -172,10 +193,26 @@ int main() {
         }
         int stat = 0;
         int pid;
-        if (!bckgrnd)
-          pid = waitpid(child_pid, &stat, WUNTRACED|WEXITED);
-        else
+        if (!bckgrnd) {
+          pid = waitpid(child_pid, &stat, WUNTRACED);
+          to_foreground();
+        }
+        else {
+          // to_foreground();
           pid = waitpid(child_pid, &stat, WNOHANG);
+          if (DEBUG) {
+            printf("Parent waitpid: %d\n", pid);
+          }
+          if (TEST_SLEEP) { 
+            sleep(3);
+            printf("\nSleeping...\n");
+            kill(child_pid, SIGTSTP);
+            sleep(2);
+            printf("\nWaking...\n");
+            kill(child_pid, SIGCONT);
+          }
+          // while (waitpid((pid_t) (-1), 0, WNOHANG) > 0) {printf("Collecting...\n");}
+        }
 
         if (DEBUG) {
           if (bckgrnd)
@@ -187,12 +224,13 @@ int main() {
     else if (DEBUG2) {
       printf("Null detected\n");
     }
-    if (DEBUG)
+    if (DEBUG) {
       printf("Almost out\n");
-
-    
+    }
   }
   while(1);
+  while (waitpid((pid_t) (-1), 0, WNOHANG) > 0) {printf("Collecting...\n");}
+  return 0;
 }
 
 
