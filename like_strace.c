@@ -4,7 +4,11 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/reg.h>
+#include <sys/syscall.h>
 #include <sys/user.h>
+#include <errno.h>
+#include <string.h>
+
 
 //http://stackoverflow.com/questions/7514837/why-does-this-ptrace-program-say-syscall-returned-38
 
@@ -26,11 +30,64 @@ void print_debug(char *str) {
   }
 }
 
-int main(int argc, char *argv[]) {
+void system_call_line(int argc, char *argv[]) {
 
-  if (argc == 1) {
-    fprintf(stderr, "Error: Syntax is\n./like_strace.out [-line] prog [args]\n");
+  print_debug("Here- Line!!\n");
+
+  pid_t child_pid;
+
+  if ((child_pid = fork()) == 0) {
+    print_debug("Child: Entering\n");
+
+    if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) == -1) {
+      perror("ptrace in Child");
+    }
+
+    print_debug("Child: After ptrace\n");
+
+    // if (raise(SIGSTOP) != 0) {
+    //   perror("raise stop signal in child");
+    // }
+
+    // print_debug("Child: After STOP\n");
+
+    if (execvp(argv[2], argv + 2) == -1) {
+      perror("Exec error");
+    }
   }
+  else {
+    int stat;
+
+    print_debug("Parent: Entering...\n");
+
+    while (1) {
+
+      int stat;
+      wait(&stat);
+
+      if (WIFEXITED(stat)) {
+        print_debug("Done...\n");
+        break;
+      }
+
+      struct user_regs_struct regists;
+
+      ptrace(PTRACE_GETREGS, child_pid, NULL, &regists);
+
+      int instr = ptrace(PTRACE_PEEKTEXT, child_pid, regists.rip, NULL);
+
+      printf("IP: %llx Instruction: %x\n", regists.rip, instr);
+
+      ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL);
+    }
+
+  }
+
+}
+
+void system_call_print(int argc, char *argv[]) {
+
+  print_debug("Here- Syscall!!\n");
 
   pid_t child_pid;
 
@@ -92,11 +149,39 @@ int main(int argc, char *argv[]) {
         break;
       }
 
-      int syscall, retval;
+      if (!WIFSTOPPED(stat) || !(/*(WSTOPSIG(stat) == SIGTRAP) && */(WSTOPSIG(stat) & 0x80))) {
+        continue;
+      }
 
-      syscall = ptrace(PTRACE_PEEKUSER, child_pid, sizeof(long) * ORIG_EAX);
-      retval = ptrace(PTRACE_PEEKUSER, child_pid, sizeof(long) * EAX);
-      fprintf(stderr, "syscall(%d) = %d\n", syscall, retval);
+      int syscall_num, return_val;
+
+      syscall_num = ptrace(PTRACE_PEEKUSER, child_pid, sizeof(long) * ORIG_EAX);
+
+      ptrace(PTRACE_SYSCALL, child_pid, NULL, NULL);
+
+      print_debug("Signal...\n");
+
+      // tracee enters ptrace stop
+      if (waitpid(child_pid, &stat, WUNTRACED) == -1)
+        perror("Waiting for signal");
+
+      if (WIFEXITED(stat)) {
+        print_debug("Done...\n");
+        break;
+      }
+
+      if (!WIFSTOPPED(stat) || !(WSTOPSIG(stat) & 0x80)) {
+        continue;
+      }
+
+      return_val = ptrace(PTRACE_PEEKUSER, child_pid, sizeof(long) * EAX);
+
+      if (return_val >= 0) {
+        fprintf(stderr, "System call: %d Return: %d\n", syscall_num, return_val);
+      }
+      else {
+        fprintf(stderr, "System call: %d Return: -1 (%s)\n", syscall_num, strerror(return_val * -1));
+      }
 
       // // to restart, and stop when child returns
       // ptrace(PTRACE_SYSCALL, child_pid, NULL, NULL);
@@ -120,5 +205,27 @@ int main(int argc, char *argv[]) {
 
   }
 
+}
+
+int main(int argc, char *argv[]) {
+
+  if (argc == 1 || (argc == 2 && strcmp(argv[1], "-line") == 0)) {
+    fprintf(stderr, "Error: Syntax is\n./like_strace.out [-line] prog [args]\n");
+  }
+
+  if (strcmp(argv[1], "-line") == 0) {
+    system_call_line(argc, argv);
+  }
+  else{
+    system_call_print(argc, argv);
+  }
+
   return 0;
 }
+
+// References:
+// http://theantway.com/2013/01/notes-for-playing-with-ptrace-on-64-bits-ubuntu-12-10/
+// http://www.linuxjournal.com/node/6100/print
+// https://mikecvet.wordpress.com/2010/08/14/ptrace-tutorial/
+// https://github.com/nelhage/ministrace
+// https://blog.nelhage.com/2010/08/write-yourself-an-strace-in-70-lines-of-code/
