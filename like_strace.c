@@ -74,9 +74,19 @@ void system_call_line(int argc, char *argv[]) {
 
       ptrace(PTRACE_GETREGS, child_pid, NULL, &regists);
 
-      int instr = ptrace(PTRACE_PEEKTEXT, child_pid, regists.rip, NULL);
+      unsigned long long ip;
 
-      printf("IP: %llx Instruction: %x\n", regists.rip, instr);
+      #if _____LP64_____
+        ip = regists.rip;
+      #elif __x86_64__
+        ip = regists.rip;
+      #else
+        ip = regists.eip;
+      #endif
+
+      int instr = ptrace(PTRACE_PEEKTEXT, child_pid, ip, NULL);
+
+      printf("IP: %llx Instruction: %x\n", ip, instr);
 
       ptrace(PTRACE_SINGLESTEP, child_pid, NULL, NULL);
     }
@@ -216,7 +226,7 @@ int main(int argc, char *argv[]) {
   if (strcmp(argv[1], "-line") == 0) {
     system_call_line(argc, argv);
   }
-  else{
+  else {
     system_call_print(argc, argv);
   }
 
