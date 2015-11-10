@@ -8,6 +8,9 @@
 #include <netinet/in.h>
 #include <string.h>
 
+#include <ifaddrs.h>
+#include <arpa/inet.h>
+
 #define LISTEN_BCKLG 5
 
 #define DEBUG_UNIX_SOCKET 1
@@ -288,6 +291,27 @@ int main(int argc, char **argv) {
   if (in_parent) {
     setup_signal_handler();
     int listening_fd = setup_tcp();
+    struct sockaddr_in incoming_client_addr;
+    int client_addr_len = sizeof(incoming_client_addr);
+
+    while (1) {
+      int acc_conn = accept(listening_fd, (struct sockaddr *) &incoming_client_addr, &client_addr_len);
+
+      // printf("Accepted!\n");
+      int client_port = ntohs(incoming_client_addr.sin_port);
+      char ip_buf[100];
+      inet_ntop(AF_INET, &incoming_client_addr.sin_addr, ip_buf, 100);
+
+      printf("%s %d\n", ip_buf, client_port);
+
+      char buff[20000];
+      int bytes;
+      while ((bytes = recv (acc_conn, buff, sizeof (buff), 0)) > 0) {
+        buff[bytes] = '\0';
+        printf ("%d: %s", bytes, buff);
+        send (acc_conn, buff, strlen (buff), 0);
+      }
+    }
   }
   else {
   }
