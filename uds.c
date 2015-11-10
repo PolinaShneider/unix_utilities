@@ -15,17 +15,156 @@
 
 int child;
 int in_parent;
-int master;
+
 int n;
 int port;
 
-int bcast_count;
-
 int *is_child_busy;
 pid_t *child_pids;
+int **unix_domain_sockets;
+
+void parse_arguments(int argc, char **argv) {
+  if (argc != 2 && argc != 3) {
+    fprintf(stderr, "Usage: ./uds.out PORT [N]\n");
+    exit(0);
+  }
+
+  int i;
+
+  i = 0;
+  while (argv[1][i] != '\0') {
+    if (argv[1][i] < '0' || argv[1][i] > '9') {
+      fprintf(stderr, "Error: %s is not a positive integer\nUsage: ./uds.out PORT [N]\n", argv[1]);
+      exit(0);
+    }
+    i++;
+  }
+
+  port = atoi(argv[1]); //printf("%d\n", n);
+
+  i = 0;
+
+  if (argc == 3) {
+    while (argv[2][i] != '\0') {
+      if (argv[2][i] < '0' || argv[2][i] > '9') {
+        fprintf(stderr, "Error: %s is not a positive integer\nUsage: ./uds.out PORT [N]\n", argv[2]);
+        exit(0);
+      }
+      i++;
+    }
+
+    n = atoi(argv[2]); //printf("%d\n", n);
+  }
+  else {
+    printf("Number of child processes not specified. Using 5 by default.\n");
+    n = 5;
+  }
+}
+
+void initialize_arrays() {
+  is_child_busy = (int *) malloc(sizeof(int) * n);
+  child_pids = (pid_t *) malloc(sizeof(pid_t) * n);
+
+  unix_domain_sockets = (int **) malloc(sizeof(int *) * n);
+
+  int i;
+
+  for (i = 0; i < n; i++) {
+    unix_domain_sockets[i] = (int *) malloc(sizeof(int) * 2);
+  }
+}
+
+void deinitialize_arrays() {
+
+  free(is_child_busy);
+  free(child_pids);
+
+  int i;
+  for (i = 0; i < n; i++) {
+    free(unix_domain_sockets[i]);
+  }
+  free(unix_domain_sockets);
+}
+
+void setup_unix_ds() {
+  int i;
+
+  for (i = 0; i < n; i++) {
+    if (socketpair(PF_UNIX, SOCK_STREAM, 0, unix_domain_sockets[i]) == -1) {
+      perror("Error creating socketpair");
+      exit(1);
+    }
+  }
+}
+
+void generate_children() {
+  int i;
+  in_parent = 1;
+
+  for (i = 0; i < n; i++) {
+    pid_t temp;
+    if ((temp = fork()) == 0) {
+      in_parent = 0;
+      child = i;
+      break;
+    }
+    else {
+      child_pids[i] = temp;
+    }
+
+    is_child_busy[i] = 0;
+  }
+}
+
+void close_unix_ds() {
+  int i;
+  if (in_parent) {
+    for (i = 0; i < n; i++)
+      close(unix_domain_sockets[i][1]);
+  }
+  else {
+    for (i = 0; i < n; i++) {
+      close(unix_domain_sockets[i][0]);
+      if (i != child)
+        close(unix_domain_sockets[i][1]);
+    }
+  }
+}
+
+void test_unix_socket() {
+  if (in_parent) {
+
+    int pd = getpid();
+    int npid = htonl(pd);
+
+    int i;
+    for (i = 0; i < n; i++)
+      write(unix_domain_sockets[i][0], &npid, sizeof(npid));
+
+    for (i = 0; i < n; i++) {
+      read(unix_domain_sockets[i][0], &pd, sizeof(pd));
+      npid = ntohl(pd);
+      printf("Parent %d: Recd %d\n", getpid(), npid);
+    }
+
+  }
+  else {
+    int pd;
+    read(unix_domain_sockets[child][1], &pd, sizeof(pd));
+    int rpid = ntohl(pd);
+    printf("Child %d: Recd %d\n", getpid(), rpid);
+
+    pd = getpid();
+    rpid = htonl(pd);
+    write(unix_domain_sockets[child][1], &rpid, sizeof(rpid));
+  }
+}
 
 void int_handler() {
   printf("INT!\n");
+  /*
+  FILL
+  */
 }
 
 void setup_signal_handler() {
@@ -133,105 +272,27 @@ int *setup_unix_connections() {
 
 int main(int argc, char **argv) {
 
-  if (argc != 2 && argc != 3) {
-    fprintf(stderr, "Usage: ./uds.out PORT [N]\n");
-    exit(0);
-  }
+  parse_arguments(argc, argv);
 
-  int i;
+  initialize_arrays();
 
-  i = 0;
-  while (argv[1][i] != '\0') {
-    if (argv[1][i] < '0' || argv[1][i] > '9') {
-      fprintf(stderr, "Error: %s is not a positive integer\nUsage: ./uds.out PORT [N]\n", argv[1]);
-      exit(0);
-    }
-    i++;
-  }
+  setup_unix_ds();
 
-  port = atoi(argv[1]); //printf("%d\n", n);
+  generate_children();
 
-  i = 0;
+  close_unix_ds();
 
-  if (argc == 3) {
-    while (argv[2][i] != '\0') {
-      if (argv[2][i] < '0' || argv[2][i] > '9') {
-        fprintf(stderr, "Error: %s is not a positive integer\nUsage: ./uds.out PORT [N]\n", argv[2]);
-        exit(0);
-      }
-      i++;
-    }
-
-    n = atoi(argv[2]); //printf("%d\n", n);
-  }
-  else {
-    printf("Number of child processes not specified. Using 5 by default.\n");
-    n = 5;
-  }
-
-  is_child_busy = (int *) malloc(sizeof(int) * n);
-  child_pids = (pid_t *) malloc(sizeof(pid_t) * n);
-
-  int in_parent = 1;
-
-  for (i = 0; i < n; i++) {
-    pid_t temp;
-    if ((temp = fork()) == 0) {
-      in_parent = 0;
-      child = i;
-      break;
-    }
-    else {
-      child_pids[i] = temp;
-    }
-
-    is_child_busy[i] = 0;
-  }
+  if (DEBUG_UNIX_SOCKET)
+    test_unix_socket();
 
   if (in_parent) {
     setup_signal_handler();
-
     int listening_fd = setup_tcp();
-
-    sleep(3);
-
-    int *child_unix = setup_unix_connections();
-
-    struct sockaddr_in client_addr;
-    int client_addr_len = sizeof(client_addr);
-    int connected_fd;
-
-    if (DEBUG_UNIX_SOCKET) {
-      printf("Parent PID: %d\n", getpid());
-      int i, pid_num;
-      pid_num = getpid();
-      for (i = 0; i < n; i++)
-        write(child_unix[i], &pid_num, 1);
-
-      printf("DONE\n");
-    }
-    while (1) {
-      //   connected_fd = accept(listening_fd, (struct sockaddr *) &client_addr, &client_addr_len);
-    }
-
   }
   else {
-
-    int unix_fd = setup_unix_ds_server();
-
-    if (DEBUG)
-      printf("In child %d\n", child);
-
-    int num;
-
-    if (DEBUG_UNIX_SOCKET) {
-      read(unix_fd, &num, sizeof(&num));
-      printf("%d: recd. %d\n", getpid(), num);
-    }
   }
 
-  free(is_child_busy);
-  free(child_pids);
+  deinitialize_arrays();
 
   return 0;
 }
