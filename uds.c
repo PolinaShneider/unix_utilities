@@ -288,84 +288,69 @@ void handle_echo_server(long acc_conn) {
 
   if (DEBUG)
     printf("Connection Closed with %d bytes\n", bytes);
+
+  close(acc_conn);
 }
 
-int send_fd(int sock, int fd) {
-  struct iovec vector;        /* some data to pass w/ the fd */
-  struct msghdr msg;          /* the complete message */
-  struct cmsghdr * cmsg;      /* the control message, which will */
-  /* include the fd */
+// The code in the following function has been adapted from childProcess() code in lab sheet 7
+void send_fd(int sock, int fd) {
+  struct iovec vec;
+  vec.iov_base = "";
+  vec.iov_len = strlen("") + 1;
 
-  /* Send the file name down the socket, including the trailing
-     '\0' */
-  vector.iov_base = "";
-  vector.iov_len = strlen("") + 1;
+  struct cmsghdr * cmessage;
+  cmessage = alloca(sizeof(struct cmsghdr) + sizeof(fd));
+  cmessage->cmsg_level = SOL_SOCKET;
+  cmessage->cmsg_type = SCM_RIGHTS;
+  cmessage->cmsg_len = sizeof(struct cmsghdr) + sizeof(fd);
 
-  /* Put together the first part of the message. Include the
-     file name iovec */
-  msg.msg_name = NULL;
-  msg.msg_namelen = 0;
-  msg.msg_iov = &vector;
-  msg.msg_iovlen = 1;
+  memcpy(CMSG_DATA(cmessage), &fd, sizeof(fd));
 
-  /* Now for the control message. We have to allocate room for
-     the file descriptor. */
-  cmsg = alloca(sizeof(struct cmsghdr) + sizeof(fd));
-  cmsg->cmsg_len = sizeof(struct cmsghdr) + sizeof(fd);
-  cmsg->cmsg_level = SOL_SOCKET;
-  cmsg->cmsg_type = SCM_RIGHTS;
+  struct msghdr message;
+  message.msg_iov = &vec;
+  message.msg_iovlen = 1;
+  message.msg_name = NULL;
+  message.msg_namelen = 0;
+  message.msg_control = cmessage;
+  message.msg_controllen = cmessage->cmsg_len;
 
-  /* copy the file descriptor onto the end of the control
-     message */
-  memcpy(CMSG_DATA(cmsg), &fd, sizeof(fd));
+  if (DEBUG)
+    printf("Parent process %d sending fd %d\n", getpid(), fd);
 
-  msg.msg_control = cmsg;
-  msg.msg_controllen = cmsg->cmsg_len;
-  printf("Child (%d): fd is %d", getpid(), fd);
-  if (sendmsg(sock, &msg, 0) != vector.iov_len) {
-    perror("sendmsg");
+  if (sendmsg(sock, &message, 0) != vec.iov_len) {
+    perror("sendmsg() in send_fd()");
     exit(1);
   }
-
-  return 0;
 }
 
+// The code in the following function has been adapted from parentProcess() code in lab sheet 7
 int receive_fd(int sock) {
-  char buf[80];               /* space to read file name into */
-  struct iovec vector;  /* file name from the child */
-  struct msghdr msg;    /* full message */
-  struct cmsghdr * cmsg;      /* control message with the fd */
+  char buf[80];
+  struct iovec vec;
+  vec.iov_base = buf;
+  vec.iov_len = 80;
+
   int fd;
 
-  /* set up the iovec for the file name */
-  vector.iov_base = buf;
-  vector.iov_len = 80;
+  struct cmsghdr * cmessage;
+  cmessage = alloca(sizeof(struct cmsghdr) + sizeof(fd));
+  cmessage->cmsg_len = sizeof(struct cmsghdr) + sizeof(fd);
 
-  /* the message we're expecting to receive */
+  struct msghdr message;
+  message.msg_iov = &vec;
+  message.msg_iovlen = 1;
+  message.msg_name = NULL;
+  message.msg_namelen = 0;
+  message.msg_control = cmessage;
+  message.msg_controllen = cmessage->cmsg_len;
 
-  msg.msg_name = NULL;
-  msg.msg_namelen = 0;
-  msg.msg_iov = &vector;
-  msg.msg_iovlen = 1;
-
-  /* dynamically allocate so we can leave room for the file
-     descriptor */
-  cmsg = alloca(sizeof(struct cmsghdr) + sizeof(fd));
-  cmsg->cmsg_len = sizeof(struct cmsghdr) + sizeof(fd);
-  msg.msg_control = cmsg;
-  msg.msg_controllen = cmsg->cmsg_len;
-
-  if (!recvmsg(sock, &msg, 0))
+  if (!recvmsg(sock, &message, 0))
     return -1;
 
-  printf("got file descriptor for '%s'\n",
-         (char *) vector.iov_base);
+  memcpy(&fd, CMSG_DATA(cmessage), sizeof(fd));
 
-  /* grab the file descriptor from the control structure */
-  memcpy(&fd, CMSG_DATA(cmsg), sizeof(fd));
-
-  // copyData(fd, 1);
-  printf("parent (%d): fd is %d", getpid(), fd);
+  if (DEBUG)
+    printf("Child process %d receiving fd %d\n", getpid(), fd);
 
   return fd;
 }
@@ -410,6 +395,7 @@ int main(int argc, char **argv) {
         if (!is_child_busy[i]) {
           // write(unix_domain_sockets[i][0], &nw_acc_sock, sizeof(nw_acc_sock));
           send_fd(unix_domain_sockets[i][0], acc_conn);
+          close(acc_conn);
           is_child_busy[i] = 1;
           break;
         }
