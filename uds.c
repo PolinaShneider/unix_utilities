@@ -25,8 +25,18 @@ int in_parent;
 int n;
 int port;
 
-int *is_child_busy;
-pid_t *child_pids;
+struct child_details {
+  int is_child_busy;
+  int child_pid;
+  char ip_address[40];
+  int port;
+  int fd;
+};
+
+struct child_details *child_details_array;
+
+// int *is_child_busy;
+// pid_t *child_pids;
 int **unix_domain_sockets;
 
 void parse_arguments(int argc, char **argv) {
@@ -68,19 +78,8 @@ void parse_arguments(int argc, char **argv) {
 }
 
 void initialize_arrays() {
-  is_child_busy = (int *) malloc(sizeof(int) * n);
 
-  if (is_child_busy == NULL) {
-    printf("Error when allocating memory for is_child_busy\n");
-    exit(1);
-  }
-
-  child_pids = (pid_t *) malloc(sizeof(pid_t) * n);
-
-  if (child_pids == NULL) {
-    printf("Error when allocating memory for child_pids\n");
-    exit(1);
-  }
+  child_details_array = (struct child_details *) malloc(sizeof(struct child_details) * n);
 
   unix_domain_sockets = (int **) malloc(sizeof(int *) * n);
 
@@ -103,8 +102,7 @@ void initialize_arrays() {
 
 void deinitialize_arrays() {
 
-  free(is_child_busy);
-  free(child_pids);
+  free(child_details_array);
 
   int i;
   for (i = 0; i < n; i++) {
@@ -140,10 +138,10 @@ void generate_children() {
       exit(1);
     }
     else {
-      child_pids[i] = temp;
+      child_details_array[i].child_pid = temp;
     }
 
-    is_child_busy[i] = 0;
+    child_details_array[i].is_child_busy = 0;
   }
 }
 
@@ -206,10 +204,21 @@ void int_handler() {
   int i;
 
   for (i = 0; i < n; i++)
-    used += is_child_busy[i];
+    used += child_details_array[i].is_child_busy;
 
-  printf("\n%d out of %d children currently handling connections\n", used, n);
+  printf("\n%d out of %d children currently handling connections\n\n", used, n);
 
+  if (used > 0) {
+    printf("Child no.       PID          Client IP    Client Port    Parent FD\n");
+    printf("---------    ------    ---------------    -----------    ---------\n");
+
+    for (i = 0; i < n; i++) {
+      if (child_details_array[i].is_child_busy) {
+        printf("%9d    %6d    %15s    %11d    %9d\n", i + 1, child_details_array[i].child_pid, child_details_array[i].ip_address, child_details_array[i].port, child_details_array[i].fd);
+      }
+    }
+    printf("\n");
+  }
 }
 
 void setup_signal_handler() {
@@ -466,12 +475,19 @@ int main(int argc, char **argv) {
         long nw_acc_sock = htonl((long)acc_conn);
 
         for (i = 0; i < n; i++)
-          if (!is_child_busy[i]) {
+          if (!child_details_array[i].is_child_busy) {
             send_fd(unix_domain_sockets[i][0], acc_conn);
-            if (close(acc_conn) == -1)
-              perror("Error in closing fd after accepting connection");
-            printf("Client IP: %s Port: %d FD: %d Child: %d\n", ip_buf, client_port, acc_conn, child_pids[i]);
-            is_child_busy[i] = 1;
+            printf("Client IP: %s Port: %d FD: %d Child: %d Child Number: %d\n", ip_buf, client_port, acc_conn, child_details_array[i].child_pid, i + 1);
+            child_details_array[i].is_child_busy = 1;
+            /*
+            struct child_details {
+            int is_child_busy;
+            int child_pid;
+            };
+            */
+            strcpy(child_details_array[i].ip_address, ip_buf);
+            child_details_array[i].port = client_port;
+            child_details_array[i].fd = acc_conn;
             break;
           }
         if (i == n) {
@@ -483,8 +499,11 @@ int main(int argc, char **argv) {
 
       for (i = 0; i < n; i++)
         if (FD_ISSET(unix_domain_sockets[i][0], &read_set)) {
-          is_child_busy[i] = 0;
+          child_details_array[i].is_child_busy = 0;
           receive_termination_one(unix_domain_sockets[i][0]);
+
+          if (close(child_details_array[i].fd) == -1)
+            perror("Error in closing fd after accepting connection");
 
           if (DEBUG)
             printf("Child %d free\n", i);
@@ -501,11 +520,11 @@ int main(int argc, char **argv) {
       long nw_acc_sock;
       long acc_sock = receive_fd(unix_domain_sockets[child][1]);
 
-      printf("Child %d (PID: %d) starting connection\n", child, getpid());
+      printf("Child %d (PID: %d) starting connection\n", child + 1, getpid());
 
       handle_echo_server(acc_sock);
 
-      printf("Child %d (PID: %d) terminating connection\n", child, getpid());
+      printf("Child %d (PID: %d) terminating connection\n", child + 1, getpid());
 
       send_termination_one(unix_domain_sockets[child][1]);
     }
