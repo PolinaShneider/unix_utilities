@@ -16,6 +16,8 @@
 #define DEBUG_UNIX_SOCKET 1
 #define DEBUG 1
 
+#define MAX(X, Y) ((X) > (Y) ? (X) : (Y))
+
 int child;
 int in_parent;
 
@@ -355,6 +357,18 @@ int receive_fd(int sock) {
   return fd;
 }
 
+void send_termination_one(int fd) {
+  int nw_one = htons(1);
+  write(fd, &nw_one, sizeof(nw_one));
+}
+
+void receive_termination_one(int fd) {
+  int nw_one;
+  read(fd, &nw_one, sizeof(nw_one));
+
+  if (DEBUG)
+    printf("Received: %d\n", ntohs(nw_one));
+}
 
 int main(int argc, char **argv) {
 
@@ -377,30 +391,59 @@ int main(int argc, char **argv) {
     struct sockaddr_in incoming_client_addr;
     int client_addr_len = sizeof(incoming_client_addr);
 
+    fd_set read_set;
+
+    FD_ZERO(&read_set);
+
+    int max_fd;
+
+    int i;
+
+    for (i = 0; i < n; i++)
+      max_fd = MAX(unix_domain_sockets[i][0], max_fd);
+
+    max_fd = MAX(listening_fd, max_fd);
+
+    max_fd++;
+
     while (1) {
-      int acc_conn = accept(listening_fd, (struct sockaddr *) &incoming_client_addr, &client_addr_len);
-
-      // printf("Accepted!\n");
-      int client_port = ntohs(incoming_client_addr.sin_port);
-      char ip_buf[100];
-      inet_ntop(AF_INET, &incoming_client_addr.sin_addr, ip_buf, 100);
-
-      printf("IP: %s Port: %d FD: %d\n", ip_buf, client_port, acc_conn);
-
-      long nw_acc_sock = htonl((long)acc_conn);
-
-      int i;
 
       for (i = 0; i < n; i++)
-        if (!is_child_busy[i]) {
-          // write(unix_domain_sockets[i][0], &nw_acc_sock, sizeof(nw_acc_sock));
-          send_fd(unix_domain_sockets[i][0], acc_conn);
-          close(acc_conn);
-          is_child_busy[i] = 1;
-          break;
+        FD_SET(unix_domain_sockets[i][0], &read_set);
+
+      FD_SET(listening_fd, &read_set);
+
+      select(max_fd, &read_set, NULL, NULL, NULL);
+
+      if (FD_ISSET(listening_fd, &read_set)) {
+        int acc_conn = accept(listening_fd, (struct sockaddr *) &incoming_client_addr, &client_addr_len);
+
+        // printf("Accepted!\n");
+        int client_port = ntohs(incoming_client_addr.sin_port);
+        char ip_buf[100];
+        inet_ntop(AF_INET, &incoming_client_addr.sin_addr, ip_buf, 100);
+
+        printf("IP: %s Port: %d FD: %d\n", ip_buf, client_port, acc_conn);
+
+        long nw_acc_sock = htonl((long)acc_conn);
+
+        for (i = 0; i < n; i++)
+          if (!is_child_busy[i]) {
+            // write(unix_domain_sockets[i][0], &nw_acc_sock, sizeof(nw_acc_sock));
+            send_fd(unix_domain_sockets[i][0], acc_conn);
+            close(acc_conn);
+            is_child_busy[i] = 1;
+            break;
+          }
+      }
+
+      for (i = 0; i < n; i++)
+        if (FD_ISSET(unix_domain_sockets[i][0], &read_set)) {
+          is_child_busy[i] = 0;
+          receive_termination_one(unix_domain_sockets[i][0]);
+          printf("Child %d free\n", i);
         }
 
-      // handle_echo_server((long)acc_conn);
     }
   }
   else {
@@ -409,6 +452,7 @@ int main(int argc, char **argv) {
       // read(unix_domain_sockets[child][1], &nw_acc_sock, sizeof(nw_acc_sock));
       long acc_sock = receive_fd(unix_domain_sockets[child][1]); //ntohl(nw_acc_sock);
       handle_echo_server(acc_sock);
+      send_termination_one(unix_domain_sockets[child][1]);
     }
   }
 
