@@ -14,7 +14,7 @@
 #define LISTEN_BCKLG 5
 
 #define DEBUG_UNIX_SOCKET 1
-#define DEBUG 1
+#define DEBUG 0
 
 #define MAX(X, Y) ((X) > (Y) ? (X) : (Y))
 
@@ -149,7 +149,9 @@ void test_unix_socket() {
     for (i = 0; i < n; i++) {
       read(unix_domain_sockets[i][0], &pd, sizeof(pd));
       npid = ntohl(pd);
-      printf("Parent %d: Recd %d\n", getpid(), npid);
+
+      if (DEBUG)
+        printf("Parent %d: Recd %d\n", getpid(), npid);
     }
 
   }
@@ -157,7 +159,9 @@ void test_unix_socket() {
     int pd;
     read(unix_domain_sockets[child][1], &pd, sizeof(pd));
     int rpid = ntohl(pd);
-    printf("Child %d: Recd %d\n", getpid(), rpid);
+
+    if (DEBUG)
+      printf("Child %d: Recd %d\n", getpid(), rpid);
 
     pd = getpid();
     rpid = htonl(pd);
@@ -284,7 +288,10 @@ void handle_echo_server(long acc_conn) {
   int bytes;
   while ((bytes = recv (acc_conn, buff, sizeof (buff), 0)) != EOF && bytes != 0) {
     buff[bytes] = '\0';
-    printf ("%d: %s", bytes, buff);
+
+    if (DEBUG)
+      printf ("%d: %s", bytes, buff);
+
     send (acc_conn, buff, strlen (buff), 0);
   }
 
@@ -418,20 +425,17 @@ int main(int argc, char **argv) {
       if (FD_ISSET(listening_fd, &read_set)) {
         int acc_conn = accept(listening_fd, (struct sockaddr *) &incoming_client_addr, &client_addr_len);
 
-        // printf("Accepted!\n");
         int client_port = ntohs(incoming_client_addr.sin_port);
         char ip_buf[100];
         inet_ntop(AF_INET, &incoming_client_addr.sin_addr, ip_buf, 100);
-
-        printf("IP: %s Port: %d FD: %d\n", ip_buf, client_port, acc_conn);
 
         long nw_acc_sock = htonl((long)acc_conn);
 
         for (i = 0; i < n; i++)
           if (!is_child_busy[i]) {
-            // write(unix_domain_sockets[i][0], &nw_acc_sock, sizeof(nw_acc_sock));
             send_fd(unix_domain_sockets[i][0], acc_conn);
             close(acc_conn);
+            printf("Client IP: %s Port: %d FD: %d Child: %d\n", ip_buf, client_port, acc_conn, child_pids[i]);
             is_child_busy[i] = 1;
             break;
           }
@@ -441,7 +445,9 @@ int main(int argc, char **argv) {
         if (FD_ISSET(unix_domain_sockets[i][0], &read_set)) {
           is_child_busy[i] = 0;
           receive_termination_one(unix_domain_sockets[i][0]);
-          printf("Child %d free\n", i);
+
+          if (DEBUG)
+            printf("Child %d free\n", i);
         }
 
     }
@@ -449,9 +455,14 @@ int main(int argc, char **argv) {
   else {
     while (1) {
       long nw_acc_sock;
-      // read(unix_domain_sockets[child][1], &nw_acc_sock, sizeof(nw_acc_sock));
-      long acc_sock = receive_fd(unix_domain_sockets[child][1]); //ntohl(nw_acc_sock);
+      long acc_sock = receive_fd(unix_domain_sockets[child][1]);
+
+      printf("Child %d (PID: %d) starting connection\n", child, getpid());
+
       handle_echo_server(acc_sock);
+
+      printf("Child %d (PID: %d) terminating connection\n", child, getpid());
+
       send_termination_one(unix_domain_sockets[child][1]);
     }
   }
