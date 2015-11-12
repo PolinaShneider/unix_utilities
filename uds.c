@@ -69,14 +69,35 @@ void parse_arguments(int argc, char **argv) {
 
 void initialize_arrays() {
   is_child_busy = (int *) malloc(sizeof(int) * n);
+
+  if (is_child_busy == NULL) {
+    printf("Error when allocating memory for is_child_busy\n");
+    exit(1);
+  }
+
   child_pids = (pid_t *) malloc(sizeof(pid_t) * n);
 
+  if (child_pids == NULL) {
+    printf("Error when allocating memory for child_pids\n");
+    exit(1);
+  }
+
   unix_domain_sockets = (int **) malloc(sizeof(int *) * n);
+
+  if (unix_domain_sockets == NULL) {
+    printf("Error when allocating memory for unix_domain_sockets\n");
+    exit(1);
+  }
 
   int i;
 
   for (i = 0; i < n; i++) {
     unix_domain_sockets[i] = (int *) malloc(sizeof(int) * 2);
+
+    if (unix_domain_sockets[i] == NULL) {
+      printf("Error when allocating memory for unix_domain_sockets[%d]\n", i);
+      exit(1);
+    }
   }
 }
 
@@ -114,6 +135,10 @@ void generate_children() {
       child = i;
       break;
     }
+    else if (temp == -1) {
+      perror("Error while forking to create children");
+      exit(1);
+    }
     else {
       child_pids[i] = temp;
     }
@@ -126,13 +151,19 @@ void close_unix_ds() {
   int i;
   if (in_parent) {
     for (i = 0; i < n; i++)
-      close(unix_domain_sockets[i][1]);
+      if (close(unix_domain_sockets[i][1]) == -1) {
+        perror("Error when closing unix domain socket in parent");
+      }
   }
   else {
     for (i = 0; i < n; i++) {
-      close(unix_domain_sockets[i][0]);
+      if (close(unix_domain_sockets[i][0]) == -1) {
+        perror("Error when closing unix domain socket in child");
+      }
       if (i != child)
-        close(unix_domain_sockets[i][1]);
+        if (close(unix_domain_sockets[i][1]) == -1) {
+          perror("Error when closing unix domain socket in child");
+        }
     }
   }
 }
@@ -187,7 +218,7 @@ void setup_signal_handler() {
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
   if (sigaction(SIGINT, &sa, 0) == -1) {
-    perror("Unable to set SIGINT action");
+    perror("Unable to set SIGINT action in parent");
   }
 }
 
@@ -197,12 +228,15 @@ void setup_child_signal_handler() {
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
   if (sigaction(SIGINT, &sa, 0) == -1) {
-    perror("Unable to set SIGINT action");
+    perror("Unable to set SIGINT action in child");
   }
 }
 
 int setup_tcp() {
   int fd = socket(PF_INET, SOCK_STREAM, 0);
+
+  if (fd == -1)
+    perror("Error in socket()");
 
   struct sockaddr_in server_addr;
   bzero(&server_addr, sizeof(server_addr));
@@ -211,9 +245,11 @@ int setup_tcp() {
   server_addr.sin_port = htons(port);
   server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-  bind(fd, (struct sockaddr *) &server_addr, sizeof(server_addr));
+  if (bind(fd, (struct sockaddr *) &server_addr, sizeof(server_addr)) == -1)
+    perror("Error in bind()");
 
-  listen(fd, LISTEN_BCKLG);
+  if (listen(fd, LISTEN_BCKLG) == -1)
+    perror("Error in listen()");
 
   int flags;
   if ((flags = fcntl(fd, F_GETFL, 0)) >= 0) {
@@ -246,7 +282,8 @@ void handle_echo_server(long acc_conn) {
   if (DEBUG)
     printf("Connection Closed with %d bytes\n", bytes);
 
-  close(acc_conn);
+  if (close(acc_conn) == -1)
+    perror("Error in closing fd after echo");
 }
 
 // The code in the following function has been adapted from childProcess() code in lab sheet 7
@@ -275,8 +312,7 @@ void send_fd(int sock, int fd) {
     printf("Parent process %d sending fd %d\n", getpid(), fd);
 
   if (sendmsg(sock, &message, 0) != vec.iov_len) {
-    perror("sendmsg() in send_fd()");
-    exit(1);
+    perror("Error in sendmsg() in parent");
   }
 }
 
@@ -301,8 +337,13 @@ int receive_fd(int sock) {
   message.msg_control = cmessage;
   message.msg_controllen = cmessage->cmsg_len;
 
-  if (!recvmsg(sock, &message, 0))
+  int recvmsgval = recvmsg(sock, &message, 0);
+  if (!recvmsgval)
     return -1;
+  else if (recvmsgval == -1) {
+    perror("Error when receiving fd in child");
+    return -1;
+  }
 
   memcpy(&fd, CMSG_DATA(cmessage), sizeof(fd));
 
@@ -314,7 +355,10 @@ int receive_fd(int sock) {
 
 void send_termination_one(int fd) {
   int nw_one = htons(1);
-  write(fd, &nw_one, sizeof(nw_one));
+  int write_ret = write(fd, &nw_one, sizeof(nw_one));
+
+  if (write_ret == -1)
+    perror("Error when sending '1' to parent");
 }
 
 void receive_termination_one(int fd) {
@@ -323,6 +367,25 @@ void receive_termination_one(int fd) {
 
   if (DEBUG)
     printf("Received: %d\n", ntohs(nw_one));
+
+  if (ntohs(nw_one) != 1)
+    printf("Warning: Received termination %d instead of termination 1\n", ntohs(nw_one));
+}
+
+void close_parent_fds(int listening_fd) {
+  int i;
+
+  for (i = 0; i < n; i++)
+    if (close(unix_domain_sockets[i][0]) == -1)
+      perror("Error closing UDS in parent");
+
+  if (close(listening_fd) == -1)
+    perror("Error closing TCP socket");
+}
+
+void close_child_fd() {
+  if (close(unix_domain_sockets[child][1]) == -1)
+    perror("Error closing UDS in child");
 }
 
 int main(int argc, char **argv) {
@@ -405,11 +468,17 @@ int main(int argc, char **argv) {
         for (i = 0; i < n; i++)
           if (!is_child_busy[i]) {
             send_fd(unix_domain_sockets[i][0], acc_conn);
-            close(acc_conn);
+            if (close(acc_conn) == -1)
+              perror("Error in closing fd after accepting connection");
             printf("Client IP: %s Port: %d FD: %d Child: %d\n", ip_buf, client_port, acc_conn, child_pids[i]);
             is_child_busy[i] = 1;
             break;
           }
+        if (i == n) {
+          printf("Client IP: %s Port: %d FD: %d Child: N/A (Connection rejected since all children are busy)\n", ip_buf, client_port, acc_conn);
+          if (close(acc_conn) == -1)
+            perror("Error in closing fd after accepting connection");
+        }
       }
 
       for (i = 0; i < n; i++)
@@ -422,6 +491,9 @@ int main(int argc, char **argv) {
         }
 
     }
+
+    // this should never be called
+    close_parent_fds(listening_fd);
   }
   else {
     setup_child_signal_handler();
@@ -437,8 +509,12 @@ int main(int argc, char **argv) {
 
       send_termination_one(unix_domain_sockets[child][1]);
     }
+
+    // this should never be called
+    close_child_fd();
   }
 
+  // this should never be called
   deinitialize_arrays();
 
   return 0;
