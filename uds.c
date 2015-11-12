@@ -7,7 +7,8 @@
 #include <sys/un.h>
 #include <netinet/in.h>
 #include <string.h>
-
+#include <fcntl.h>
+#include <errno.h>
 #include <ifaddrs.h>
 #include <arpa/inet.h>
 
@@ -170,15 +171,29 @@ void test_unix_socket() {
 }
 
 void int_handler() {
-  printf("INT!\n");
-  /*
-  FILL
-  */
+  int used = 0;
+  int i;
+
+  for (i = 0; i < n; i++)
+    used += is_child_busy[i];
+
+  printf("\n%d out of %d children currently handling connections\n", used, n);
+
 }
 
 void setup_signal_handler() {
   struct sigaction sa;
   sa.sa_handler = &int_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+  if (sigaction(SIGINT, &sa, 0) == -1) {
+    perror("Unable to set SIGINT action");
+  }
+}
+
+void setup_child_signal_handler() {
+  struct sigaction sa;
+  sa.sa_handler = SIG_IGN;
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
   if (sigaction(SIGINT, &sa, 0) == -1) {
@@ -200,83 +215,16 @@ int setup_tcp() {
 
   listen(fd, LISTEN_BCKLG);
 
+  int flags;
+  if ((flags = fcntl(fd, F_GETFL, 0)) >= 0) {
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1)
+      perror("Error setting fd flag to non-blocking");
+  }
+  else {
+    perror("Error getting fd flag");
+  }
+
   return fd;
-}
-
-int setup_unix_ds_server() {
-  if (DEBUG)
-    printf("Setting up unix socket of child %d\n", child);
-
-  int fd;
-  if ((fd = socket(AF_LOCAL, SOCK_STREAM, 0)) == -1) {
-    perror("Error in socket() call");
-  }
-
-  struct sockaddr_un unix_server_address;
-  bzero(&unix_server_address, sizeof(unix_server_address));
-  unix_server_address.sun_family = AF_LOCAL;
-
-  char buf[20];
-
-  sprintf(buf, "u%dnix_socket", child);
-
-  strncpy(unix_server_address.sun_path, buf, sizeof(unix_server_address.sun_path) - 1);
-
-  unlink(buf);
-  if (bind(fd, (struct sockaddr *) &unix_server_address, sizeof(unix_server_address)) == -1) {
-    perror("Error in bind() call");
-  }
-
-  if (DEBUG)
-    printf("bind() called in child %d with name %s\n", child, unix_server_address.sun_path);
-
-  if (listen(fd, 5) == -1) {
-    perror("Error in listen() call");
-  }
-
-  if (DEBUG)
-    printf("listen() called in child %d on fd %d\n", child, fd);
-
-  int acc_fd;
-
-  if ((acc_fd = accept(fd, NULL, NULL)) == -1) {
-    perror("Error in accept() call");
-  }
-
-  if (DEBUG)
-    printf("accept() called in child %d on fd %d\n", child, acc_fd);
-
-  return acc_fd;
-}
-
-int *setup_unix_connections() {
-
-  struct sockaddr_un unix_server_address;
-  bzero(&unix_server_address, sizeof(unix_server_address));
-  unix_server_address.sun_family = AF_LOCAL;
-
-  char buf[20];
-
-  int i;
-
-  int *x = (int*) malloc(sizeof(int) * n);
-
-  for (i = 0; i < n; i++) {
-    x[i] = socket(AF_LOCAL, SOCK_STREAM, 0);
-
-    if (x[i] == -1)
-      perror("socket() called in parent");
-
-    sprintf(buf, "u%dnix_socket", i);
-    strncpy(unix_server_address.sun_path, buf, sizeof(unix_server_address.sun_path) - 1);
-
-    unlink(buf);
-
-    if (connect(x[i], (struct sockaddr *) &unix_server_address, sizeof(unix_server_address)) == -1)
-      perror("connect() called in parent");
-  }
-
-  return x;
 }
 
 void handle_echo_server(long acc_conn) {
@@ -400,8 +348,6 @@ int main(int argc, char **argv) {
 
     fd_set read_set;
 
-    FD_ZERO(&read_set);
-
     int max_fd;
 
     int i;
@@ -415,15 +361,40 @@ int main(int argc, char **argv) {
 
     while (1) {
 
+      FD_ZERO(&read_set);
+
       for (i = 0; i < n; i++)
         FD_SET(unix_domain_sockets[i][0], &read_set);
 
       FD_SET(listening_fd, &read_set);
 
-      select(max_fd, &read_set, NULL, NULL, NULL);
+      int sel_ret;
+
+      if ((sel_ret = select(max_fd, &read_set, NULL, NULL, NULL)) == -1) {
+        if (errno != EINTR)
+          perror("select()");
+        continue;
+      }
+
+      if (DEBUG)
+        printf("After select %d\n", sel_ret);
 
       if (FD_ISSET(listening_fd, &read_set)) {
+
+        if (DEBUG)
+          printf("Accept 1\n");
+
         int acc_conn = accept(listening_fd, (struct sockaddr *) &incoming_client_addr, &client_addr_len);
+
+        if (acc_conn == -1) {
+          if (errno != EAGAIN && errno != EWOULDBLOCK)
+            perror("Error in accept()");
+          else if (DEBUG)
+            perror("Error in accept()");
+        }
+
+        if (DEBUG)
+          printf("Accept 2\n");
 
         int client_port = ntohs(incoming_client_addr.sin_port);
         char ip_buf[100];
@@ -453,6 +424,7 @@ int main(int argc, char **argv) {
     }
   }
   else {
+    setup_child_signal_handler();
     while (1) {
       long nw_acc_sock;
       long acc_sock = receive_fd(unix_domain_sockets[child][1]);
