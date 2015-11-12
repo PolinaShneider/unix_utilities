@@ -273,6 +273,104 @@ int *setup_unix_connections() {
   return x;
 }
 
+void handle_echo_server(long acc_conn) {
+
+  if (DEBUG)
+    printf("Opening connection in child: %d PID: %d FD: %ld\n", child, getpid(), acc_conn);
+
+  char buff[20000];
+  int bytes;
+  while ((bytes = recv (acc_conn, buff, sizeof (buff), 0)) != EOF && bytes != 0) {
+    buff[bytes] = '\0';
+    printf ("%d: %s", bytes, buff);
+    send (acc_conn, buff, strlen (buff), 0);
+  }
+
+  if (DEBUG)
+    printf("Connection Closed with %d bytes\n", bytes);
+}
+
+int send_fd(int sock, int fd) {
+  struct iovec vector;        /* some data to pass w/ the fd */
+  struct msghdr msg;          /* the complete message */
+  struct cmsghdr * cmsg;      /* the control message, which will */
+  /* include the fd */
+
+  /* Send the file name down the socket, including the trailing
+     '\0' */
+  vector.iov_base = "";
+  vector.iov_len = strlen("") + 1;
+
+  /* Put together the first part of the message. Include the
+     file name iovec */
+  msg.msg_name = NULL;
+  msg.msg_namelen = 0;
+  msg.msg_iov = &vector;
+  msg.msg_iovlen = 1;
+
+  /* Now for the control message. We have to allocate room for
+     the file descriptor. */
+  cmsg = alloca(sizeof(struct cmsghdr) + sizeof(fd));
+  cmsg->cmsg_len = sizeof(struct cmsghdr) + sizeof(fd);
+  cmsg->cmsg_level = SOL_SOCKET;
+  cmsg->cmsg_type = SCM_RIGHTS;
+
+  /* copy the file descriptor onto the end of the control
+     message */
+  memcpy(CMSG_DATA(cmsg), &fd, sizeof(fd));
+
+  msg.msg_control = cmsg;
+  msg.msg_controllen = cmsg->cmsg_len;
+  printf("Child (%d): fd is %d", getpid(), fd);
+  if (sendmsg(sock, &msg, 0) != vector.iov_len) {
+    perror("sendmsg");
+    exit(1);
+  }
+
+  return 0;
+}
+
+int receive_fd(int sock) {
+  char buf[80];               /* space to read file name into */
+  struct iovec vector;  /* file name from the child */
+  struct msghdr msg;    /* full message */
+  struct cmsghdr * cmsg;      /* control message with the fd */
+  int fd;
+
+  /* set up the iovec for the file name */
+  vector.iov_base = buf;
+  vector.iov_len = 80;
+
+  /* the message we're expecting to receive */
+
+  msg.msg_name = NULL;
+  msg.msg_namelen = 0;
+  msg.msg_iov = &vector;
+  msg.msg_iovlen = 1;
+
+  /* dynamically allocate so we can leave room for the file
+     descriptor */
+  cmsg = alloca(sizeof(struct cmsghdr) + sizeof(fd));
+  cmsg->cmsg_len = sizeof(struct cmsghdr) + sizeof(fd);
+  msg.msg_control = cmsg;
+  msg.msg_controllen = cmsg->cmsg_len;
+
+  if (!recvmsg(sock, &msg, 0))
+    return -1;
+
+  printf("got file descriptor for '%s'\n",
+         (char *) vector.iov_base);
+
+  /* grab the file descriptor from the control structure */
+  memcpy(&fd, CMSG_DATA(cmsg), sizeof(fd));
+
+  // copyData(fd, 1);
+  printf("parent (%d): fd is %d", getpid(), fd);
+
+  return fd;
+}
+
+
 int main(int argc, char **argv) {
 
   parse_arguments(argc, argv);
@@ -302,18 +400,30 @@ int main(int argc, char **argv) {
       char ip_buf[100];
       inet_ntop(AF_INET, &incoming_client_addr.sin_addr, ip_buf, 100);
 
-      printf("%s %d\n", ip_buf, client_port);
+      printf("IP: %s Port: %d FD: %d\n", ip_buf, client_port, acc_conn);
 
-      char buff[20000];
-      int bytes;
-      while ((bytes = recv (acc_conn, buff, sizeof (buff), 0)) > 0) {
-        buff[bytes] = '\0';
-        printf ("%d: %s", bytes, buff);
-        send (acc_conn, buff, strlen (buff), 0);
-      }
+      long nw_acc_sock = htonl((long)acc_conn);
+
+      int i;
+
+      for (i = 0; i < n; i++)
+        if (!is_child_busy[i]) {
+          // write(unix_domain_sockets[i][0], &nw_acc_sock, sizeof(nw_acc_sock));
+          send_fd(unix_domain_sockets[i][0], acc_conn);
+          is_child_busy[i] = 1;
+          break;
+        }
+
+      // handle_echo_server((long)acc_conn);
     }
   }
   else {
+    while (1) {
+      long nw_acc_sock;
+      // read(unix_domain_sockets[child][1], &nw_acc_sock, sizeof(nw_acc_sock));
+      long acc_sock = receive_fd(unix_domain_sockets[child][1]); //ntohl(nw_acc_sock);
+      handle_echo_server(acc_sock);
+    }
   }
 
   deinitialize_arrays();
