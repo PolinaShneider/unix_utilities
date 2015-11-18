@@ -273,19 +273,43 @@ int main(int argc, char **argv) {
 
         char buff[10];
         int bytes;
-        int rcv_size = recv (i_fd->fd, buff, sizeof (buff), 0);
 
-        if (rcv_size == 0) {
-          close(i_fd->fd);
-          delete_fd_linkedlist_member(i_fd);
+        int rcv_size;
+
+        int first_run_done = 0;
+
+        while ((rcv_size = recv (i_fd->fd, buff, sizeof (buff) - 1, MSG_DONTWAIT)) != -1) {
+
+          if (rcv_size == 0) {
+            close(i_fd->fd);
+
+            if (DEBUG)
+              printf("Closing %d\n", i_fd->fd);
+
+            delete_fd_linkedlist_member(i_fd);
+            break;
+          }
+
+          if (first_run_done)
+            continue;
+          else
+            first_run_done = 1;
+
+          if (buff[rcv_size - 1] == '\n')
+            buff[rcv_size - 1] = '\0';
+          else
+            buff[rcv_size] = '\0';
+
+          if (DEBUG)
+            printf("Received %d bytes from client %d: %s\n", rcv_size, i_fd->fd, buff);
+
         }
 
-        buff[rcv_size-1] = '\0';
-
-        if (DEBUG)
-          printf("Received %d bytes from client %d: %s\n", rcv_size, i_fd->fd, buff);
-
+        if (rcv_size != 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+          perror("Error when receiving data from client");
+        }
       }
+
       i_fd = i_fd->next;
     }
 
