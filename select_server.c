@@ -271,7 +271,7 @@ int main(int argc, char **argv) {
     while (i_fd != NULL) {
       if (FD_ISSET(i_fd->fd, &read_set)) {
 
-        char buff[10];
+        char buff[20000];
         int bytes;
 
         int rcv_size;
