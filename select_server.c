@@ -18,10 +18,6 @@
 
 #define MAX(X, Y) ((X) > (Y) ? (X) : (Y))
 
-int child;
-int in_parent;
-
-int n;
 int port;
 
 struct fd_linkedlist {
@@ -37,10 +33,6 @@ struct group_linkedlist {
 
 struct fd_linkedlist *fds;
 struct group_linkedlist *groups;
-
-// int *is_child_busy;
-// pid_t *child_pids;
-int **unix_domain_sockets;
 
 void parse_arguments(int argc, char **argv) {
   if (argc != 2) {
@@ -106,29 +98,6 @@ void deinitialize_structs() {
 
 }
 
-void handle_echo_server(long acc_conn) {
-
-  if (DEBUG)
-    printf("Opening connection in child: %d PID: %d FD: %ld\n", child, getpid(), acc_conn);
-
-  char buff[20000];
-  int bytes;
-  while ((bytes = recv (acc_conn, buff, sizeof (buff), 0)) != EOF && bytes != 0) {
-    buff[bytes] = '\0';
-
-    if (DEBUG)
-      printf ("%d: %s", bytes, buff);
-
-    send (acc_conn, buff, strlen (buff), 0);
-  }
-
-  if (DEBUG)
-    printf("Connection Closed with %d bytes\n", bytes);
-
-  if (close(acc_conn) == -1)
-    perror("Error in closing fd after echo");
-}
-
 struct fd_linkedlist *new_fd_linkedlist_member(int acc_conn) {
   struct fd_linkedlist *new_mem = (struct fd_linkedlist *) malloc(sizeof(struct fd_linkedlist));
   new_mem->fd = acc_conn;
@@ -181,11 +150,6 @@ void delete_fd_linkedlist_member(struct fd_linkedlist *mem) {
 }
 
 void close_parent_fds(int listening_fd) {
-  int i;
-
-  for (i = 0; i < n; i++)
-    if (close(unix_domain_sockets[i][0]) == -1)
-      perror("Error closing UDS in parent");
 
   if (close(listening_fd) == -1)
     perror("Error closing TCP socket");
