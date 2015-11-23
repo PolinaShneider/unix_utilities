@@ -14,7 +14,7 @@
 
 #define LISTEN_BCKLG 5
 
-#define DEBUG 1
+#define DEBUG 0
 
 #define MAX(X, Y) ((X) > (Y) ? (X) : (Y))
 
@@ -208,18 +208,6 @@ struct group_linkedlist *new_grp_linkedlist_member(struct fd_linkedlist *fd_mem,
   return new_mem;
 }
 
-/*
-struct fd_linkedlist {
-  int fd;
-  struct fd_linkedlist *next;
-};
-
-struct group_linkedlist {
-  struct fd_linkedlist *fd;
-  char *group_name;
-  struct group_linkedlist *next;
-};
-*/
 void delete_fd_linkedlist_member(struct fd_linkedlist *mem) {
 
   struct group_linkedlist *i_grp = groups;
@@ -304,10 +292,6 @@ void delete_fd_linkedlist_member(struct fd_linkedlist *mem) {
   }
 }
 
-// DONE: add to group -> add one single fd element, not pointer directly
-// TODO: delete fd -> delete from group too
-// TODO: delete group if 0 elements
-// DONE: new_grp_linkedlist_member -> add one single fd element, not pointer directly
 void add_to_group(char *group_name, struct fd_linkedlist *add_fd) {
 
   struct group_linkedlist *i_grp = groups;
