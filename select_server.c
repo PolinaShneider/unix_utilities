@@ -19,6 +19,7 @@
 #define MAX(X, Y) ((X) > (Y) ? (X) : (Y))
 
 int port;
+int listening_fd;
 
 struct fd_linkedlist {
   int fd;
@@ -57,8 +58,10 @@ void parse_arguments(int argc, char **argv) {
 int setup_tcp() {
   int fd = socket(PF_INET, SOCK_STREAM, 0);
 
-  if (fd == -1)
+  if (fd == -1) {
     perror("Error in socket()");
+    exit(1);
+  }
 
   struct sockaddr_in server_addr;
   bzero(&server_addr, sizeof(server_addr));
@@ -67,11 +70,15 @@ int setup_tcp() {
   server_addr.sin_port = htons(port);
   server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-  if (bind(fd, (struct sockaddr *) &server_addr, sizeof(server_addr)) == -1)
+  if (bind(fd, (struct sockaddr *) &server_addr, sizeof(server_addr)) == -1) {
     perror("Error in bind()");
+    exit(1);
+  }
 
-  if (listen(fd, LISTEN_BCKLG) == -1)
+  if (listen(fd, LISTEN_BCKLG) == -1) {
     perror("Error in listen()");
+    exit(1);
+  }
 
   int flags;
   if ((flags = fcntl(fd, F_GETFL, 0)) >= 0) {
@@ -88,18 +95,83 @@ int setup_tcp() {
 void initialize() {
   fds = NULL;
   groups = NULL;
+}
 
+void close_fds() {
 
+  struct fd_linkedlist *i_fd = fds;
+
+  while (i_fd != NULL) {
+    if (close(i_fd->fd) == -1)
+      perror("Error closing fd");
+
+    i_fd = i_fd->next;
+  }
+
+  if (close(listening_fd) == -1)
+    perror("Error closing TCP socket");
 }
 
 void deinitialize_structs() {
 
-  // TODO:
+  struct group_linkedlist *i_grp = groups;
+  struct group_linkedlist *temp_grp = NULL;
 
+  while (i_grp != NULL) {
+    free(i_grp -> group_name);
+    temp_grp = i_grp->next;
+    free(i_grp);
+    i_grp = temp_grp;
+  }
+
+  struct fd_linkedlist *i_fd = fds;
+  struct fd_linkedlist *temp_fd = NULL;
+
+  while (i_fd != NULL) {
+    temp_fd = i_fd->next;
+    free(i_fd);
+    i_fd = temp_fd;
+  }
+
+}
+
+void int_handler() {
+  close_fds();
+  deinitialize_structs();
+}
+
+void quit_handler() {
+  int_handler();
+  kill(getpid(), SIGABRT);
+}
+
+void setup_signal_handler() {
+  struct sigaction sa;
+  sa.sa_handler = &int_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+  if (sigaction(SIGINT, &sa, 0) == -1) {
+    perror("Unable to set SIGINT action in parent");
+  }
+
+  if (sigaction(SIGTERM, &sa, 0) == -1) {
+    perror("Unable to set SIGTERM action in parent");
+  }
+
+  sa.sa_handler = &quit_handler;
+  if (sigaction(SIGQUIT, &sa, 0) == -1) {
+    perror("Unable to set SIGQUIT action in parent");
+  }
 }
 
 struct fd_linkedlist *new_fd_linkedlist_member(int acc_conn) {
   struct fd_linkedlist *new_mem = (struct fd_linkedlist *) malloc(sizeof(struct fd_linkedlist));
+
+  if (new_mem == NULL) {
+    perror("Error in malloc for creating new fd struct element");
+    return new_mem;
+  }
+
   new_mem->fd = acc_conn;
   new_mem->next = NULL;
   return new_mem;
@@ -107,9 +179,22 @@ struct fd_linkedlist *new_fd_linkedlist_member(int acc_conn) {
 
 struct group_linkedlist *new_grp_linkedlist_member(struct fd_linkedlist *fd_mem, char *group_name) {
   struct group_linkedlist *new_mem = (struct group_linkedlist *) malloc(sizeof(struct group_linkedlist));
+
+  if (new_mem == NULL) {
+    perror("Error in malloc for creating new group struct element");
+    return new_mem;
+  }
+
   new_mem->fd = fd_mem;
+  new_mem->next = NULL;
 
   new_mem->group_name = (char *) malloc(sizeof(char) * (strlen(group_name) + 1));
+
+  if (new_mem->group_name == NULL) {
+    perror("Error in malloc for allocating space for group name");
+    return new_mem;
+  }
+
   strcpy(new_mem->group_name, group_name);
 
   new_mem->group_name[strlen(group_name)] = '\0';
@@ -120,14 +205,84 @@ struct group_linkedlist *new_grp_linkedlist_member(struct fd_linkedlist *fd_mem,
     printf("New group name: %s\n", new_mem->group_name);
   }
 
-  new_mem->next = NULL;
   return new_mem;
 }
 
+/*
+struct fd_linkedlist {
+  int fd;
+  struct fd_linkedlist *next;
+};
+
+struct group_linkedlist {
+  struct fd_linkedlist *fd;
+  char *group_name;
+  struct group_linkedlist *next;
+};
+*/
 void delete_fd_linkedlist_member(struct fd_linkedlist *mem) {
+
+  struct group_linkedlist *i_grp = groups;
+
+  while (i_grp != NULL) {
+    // only element of grp -> delete grp
+    // what if only element of first grp?
+    struct fd_linkedlist *i_gfd = i_grp->fd;
+
+    while (i_grp->fd != NULL && i_grp->fd->fd == mem->fd) {
+      i_grp->fd = i_grp->fd->next;
+      free(i_gfd);
+      i_gfd = i_grp->fd;
+    }
+
+    struct fd_linkedlist *prev_gfd = i_grp->fd;
+
+    if (i_gfd != NULL)
+      i_gfd = i_gfd->next;
+
+    while (i_gfd != NULL) {
+      if (i_gfd->fd == mem->fd) {
+        prev_gfd->next = i_gfd->next;
+        free(i_gfd);
+        break;
+      }
+      else {
+        prev_gfd = i_gfd;
+        i_gfd = i_gfd->next;
+      }
+    }
+
+    i_grp = i_grp->next;
+  }
+
+  i_grp = groups;
+
+  while (i_grp != NULL && i_grp->fd == NULL) {
+    groups = groups->next;
+    free(i_grp);
+    i_grp = groups;
+  }
+
+  struct group_linkedlist *prev_grp = i_grp;
+
+  if (i_grp != NULL)
+    i_grp = i_grp->next;
+
+  while (i_grp != NULL) {
+    if (i_grp->fd == NULL) {
+      prev_grp->next = i_grp->next;
+      free(i_grp);
+      i_grp = prev_grp->next;
+    }
+    else {
+      prev_grp = i_grp;
+      i_grp = i_grp->next;
+    }
+  }
+
   struct fd_linkedlist *i_fd = fds;
 
-  if (fds == mem) {
+  if (fds->fd == mem->fd) {
     fds = fds->next;
     free(i_fd);
     return;
@@ -137,7 +292,7 @@ void delete_fd_linkedlist_member(struct fd_linkedlist *mem) {
   i_fd = i_fd->next;
 
   while (i_fd != NULL) {
-    if (i_fd == mem) {
+    if (i_fd->fd == mem->fd) {
       prev_fd->next = i_fd->next;
       free(i_fd);
       break;
@@ -149,12 +304,10 @@ void delete_fd_linkedlist_member(struct fd_linkedlist *mem) {
   }
 }
 
-void close_parent_fds(int listening_fd) {
-
-  if (close(listening_fd) == -1)
-    perror("Error closing TCP socket");
-}
-
+// DONE: add to group -> add one single fd element, not pointer directly
+// TODO: delete fd -> delete from group too
+// TODO: delete group if 0 elements
+// DONE: new_grp_linkedlist_member -> add one single fd element, not pointer directly
 void add_to_group(char *group_name, struct fd_linkedlist *add_fd) {
 
   struct group_linkedlist *i_grp = groups;
@@ -162,7 +315,7 @@ void add_to_group(char *group_name, struct fd_linkedlist *add_fd) {
   if (DEBUG)
     printf("Add group name: %s\n", group_name);
 
-  while (i_grp != NULL && i_grp->next != NULL) {
+  while (i_grp != NULL) {
     if (!strcmp(group_name, i_grp->group_name)) {
 
       struct fd_linkedlist *i_fd = i_grp->fd;
@@ -177,7 +330,7 @@ void add_to_group(char *group_name, struct fd_linkedlist *add_fd) {
           return;
       }
 
-      i_fd->next = add_fd;
+      i_fd->next = new_fd_linkedlist_member(add_fd->fd);
       return;
     }
     else {
@@ -190,16 +343,10 @@ void add_to_group(char *group_name, struct fd_linkedlist *add_fd) {
     if (DEBUG)
       printf("Adding new group %s to NULL list\n", group_name);
 
-    groups = new_grp_linkedlist_member(add_fd, group_name);
+    struct group_linkedlist *temp_grp = new_grp_linkedlist_member(new_fd_linkedlist_member(add_fd->fd), group_name);
+    temp_grp->next = groups;
+    groups = temp_grp;
   }
-  else {
-
-    if (DEBUG)
-      printf("Adding new group %s to non-NULL list\n", group_name);
-
-    i_grp->next = new_grp_linkedlist_member(add_fd, group_name);
-  }
-
 }
 
 void send_to_fd_list(char *buff, struct fd_linkedlist *i_fd) {
@@ -208,7 +355,9 @@ void send_to_fd_list(char *buff, struct fd_linkedlist *i_fd) {
     printf("Sending to list: %s", buff);
 
   while (i_fd != NULL) {
-    send (i_fd->fd, buff, strlen (buff), 0);
+    if (send (i_fd->fd, buff, strlen (buff), 0) == -1) {
+      perror("Error when sending to fd");
+    }
     i_fd = i_fd->next;
   }
 }
@@ -284,7 +433,7 @@ int main(int argc, char **argv) {
 
   initialize();
 
-  int listening_fd = setup_tcp();
+  listening_fd = setup_tcp();
 
   struct sockaddr_in incoming_client_addr;
   int client_addr_len = sizeof(incoming_client_addr);
@@ -410,10 +559,10 @@ int main(int argc, char **argv) {
   }
 
   // this should never be called
-  close_parent_fds(listening_fd);
+  close_fds(listening_fd);
 
   // this should never be called
-  // deinitialize_structs();
+  deinitialize_structs();
 
   return 0;
 }
