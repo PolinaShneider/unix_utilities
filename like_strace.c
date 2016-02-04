@@ -10,7 +10,6 @@
 #include <string.h>
 
 
-//http://stackoverflow.com/questions/7514837/why-does-this-ptrace-program-say-syscall-returned-38
 
 #define DEBUG 0
 
@@ -23,6 +22,16 @@
 #define ORIG_EAX ORIG_RAX
 #define EAX RAX
 #endif
+
+#include "linux/defs.h"
+
+struct_sysent syscall_entries[] = {
+  #if __x86_64__
+  #include "linux/x86_64/syscallent.h"
+  #else
+  #include "linux/x32/syscallent.h"
+  #endif
+};
 
 void print_debug(char *str) {
   if (DEBUG) {
@@ -44,12 +53,6 @@ void system_call_line(int argc, char *argv[]) {
     }
 
     print_debug("Child: After ptrace\n");
-
-    // if (raise(SIGSTOP) != 0) {
-    //   perror("raise stop signal in child");
-    // }
-
-    // print_debug("Child: After STOP\n");
 
     if (execvp(argv[2], argv + 2) == -1) {
       perror("Exec error");
@@ -95,6 +98,24 @@ void system_call_line(int argc, char *argv[]) {
 
 }
 
+int is_error(int err) {
+  if (err >= 0)
+    return 0;
+
+  char *c = strerror(err * -1);
+  char *not = "Unknown error";
+  int i;
+
+  for (i=0; i<strlen(not); i++) {
+    if (not[i] != c[i])
+      break;
+  }
+
+  if (i == strlen(not))
+    return 0;
+  else return 1;
+}
+
 void system_call_print(int argc, char *argv[]) {
 
   print_debug("Here- Syscall!!\n");
@@ -138,10 +159,6 @@ void system_call_print(int argc, char *argv[]) {
     // trap
     ptrace(PTRACE_SETOPTIONS, child_pid, 0, PTRACE_O_TRACESYSGOOD);
 
-    // // to start, and stop at next system call
-    // ptrace(PTRACE_SYSCALL, child_pid, NULL, NULL);
-
-    // print_debug("Parent: After ptrace\n");
 
     while (1) {
       print_debug("Parent: In loop\n");
@@ -159,13 +176,16 @@ void system_call_print(int argc, char *argv[]) {
         break;
       }
 
-      if (!WIFSTOPPED(stat) || !(/*(WSTOPSIG(stat) == SIGTRAP) && */(WSTOPSIG(stat) & 0x80))) {
+      if (!WIFSTOPPED(stat) || !((WSTOPSIG(stat) & 0x80))) {
         continue;
       }
 
       int syscall_num, return_val;
 
       syscall_num = ptrace(PTRACE_PEEKUSER, child_pid, sizeof(long) * ORIG_EAX);
+
+      struct user_regs_struct regists;
+      ptrace(PTRACE_GETREGS, child_pid, NULL, &regists);
 
       ptrace(PTRACE_SYSCALL, child_pid, NULL, NULL);
 
@@ -186,31 +206,40 @@ void system_call_print(int argc, char *argv[]) {
 
       return_val = ptrace(PTRACE_PEEKUSER, child_pid, sizeof(long) * EAX);
 
-      if (return_val >= 0) {
-        fprintf(stderr, "System call: %d Return: %d\n", syscall_num, return_val);
+      printf("%s (", syscall_entries[syscall_num].sys_name);
+      
+      int i;
+
+      for (i=0; i < syscall_entries[syscall_num].nargs; i++) {
+        switch (i) {
+          case 0: printf("%llu", regists.rdi);
+          break;
+          case 1: printf("%llu", regists.rsi);
+          break;
+          case 2: printf("%llu", regists.rdx);
+          break;
+          case 3: printf("%llu", regists.r10);
+          break;
+          case 4: printf("%llu", regists.r8);
+          break;
+          case 5: printf("%llu", regists.r9);
+          break;
+        }
+
+        if (i != syscall_entries[syscall_num].nargs - 1)
+          printf(", ");
+        else
+          printf(")");
+      }
+
+      if (return_val >= 0 || !is_error(return_val)) {
+        printf("  = %d\n", return_val);
       }
       else {
-        fprintf(stderr, "System call: %d Return: -1 (%s)\n", syscall_num, strerror(return_val * -1));
+        printf("  = -1 (%s)\n", strerror(return_val * -1));
       }
 
-      // // to restart, and stop when child returns
-      // ptrace(PTRACE_SYSCALL, child_pid, NULL, NULL);
 
-      // // tracee enters ptrace stop
-      // if (waitpid(child_pid, &stat, WUNTRACED) == -1)
-      //   perror("Waiting for signal");
-
-      // if (WIFEXITED(stat)) {
-      //   print_debug("Done...\n");
-      //   break;
-      // }
-
-      // retval = ptrace(PTRACE_PEEKUSER, child_pid, sizeof(long) * EAX);
-      // fprintf(stderr, "%d\n", retval);
-
-      // this is reached when child returns
-
-      // ptrace (PTRACE_CONT, child_pid, NULL, NULL);
     }
 
   }
@@ -221,6 +250,7 @@ int main(int argc, char *argv[]) {
 
   if (argc == 1 || (argc == 2 && strcmp(argv[1], "-line") == 0)) {
     fprintf(stderr, "Error: Syntax is\n./like_strace.out [-line] prog [args]\n");
+    return 0;
   }
 
   if (strcmp(argv[1], "-line") == 0) {
@@ -235,7 +265,9 @@ int main(int argc, char *argv[]) {
 
 // References:
 // http://theantway.com/2013/01/notes-for-playing-with-ptrace-on-64-bits-ubuntu-12-10/
-// http://www.linuxjournal.com/node/6100/print
+// http://www.linuxjournal.com/node/6100
 // https://mikecvet.wordpress.com/2010/08/14/ptrace-tutorial/
 // https://github.com/nelhage/ministrace
 // https://blog.nelhage.com/2010/08/write-yourself-an-strace-in-70-lines-of-code/
+// https://www.win.tue.nl/~aeb/linux/lk/lk-4.html
+// http://stackoverflow.com/questions/7514837/why-does-this-ptrace-program-say-syscall-returned-38
